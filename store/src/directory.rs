@@ -99,6 +99,14 @@ where
     K: std::str::FromStr + std::string::ToString + Send + Sync + 'static,
     V: Serializable + Send + Sync + Clone + 'static,
 {
+    // async fn get_all(&self) -> Result<Vec<V>, StoreError> {
+
+    // }
+
+    // async fn mark(&self, key: &K) -> Result<(), StoreError> {
+        
+    // }
+
     async fn load_data(&self, key: &K) -> Result<Option<V>, StoreError> {
         let path = self.get_path(key);
         log::trace!("Attempting to load data from {}", path.display());
