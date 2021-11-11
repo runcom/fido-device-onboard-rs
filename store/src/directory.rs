@@ -9,7 +9,7 @@ use xattr::FileExt;
 
 use fdo_data_formats::Serializable;
 
-use crate::{FilterType, MetadataLocalKey, MetadataValue, ValueIter};
+use crate::{FilterType, MetadataKey, MetadataLocalKey, MetadataValue, ValueIter};
 
 use super::Store;
 use super::StoreError;
@@ -279,22 +279,15 @@ where
             path.display()
         );
 
-        let ttl = match ttl {
-            None => None,
-            Some(ttl) => Some(ttl_to_disk(SystemTime::now() + ttl)?),
-        };
-
         let file = File::create(&path).map_err(|e| {
             StoreError::Unspecified(format!("Error creating file {}: {:?}", path.display(), e))
         })?;
         if let Some(ttl) = ttl {
-            file.set_xattr(XATTR_NAME_TTL, &ttl).map_err(|e| {
-                StoreError::Unspecified(format!(
-                    "Error creating xattr on {}: {:?}",
-                    path.display(),
-                    e
-                ))
-            })?;
+            self.store_metadata(
+                &key,
+                &MetadataKey(crate::StoreMetadataKey::Ttl),
+                &ttl,
+            ).await?;
         }
         value.serialize_to_writer(&file).map_err(|e| {
             StoreError::Unspecified(format!("Error writing file {}: {:?}", path.display(), e))

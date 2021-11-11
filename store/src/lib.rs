@@ -75,17 +75,23 @@ pub trait MetadataLocalKey: Send + Sync {
 }
 
 #[non_exhaustive]
-pub enum MetadataKey<T: MetadataLocalKey> {
+enum StoreMetadataKey {
     Ttl,
-    Local(T),
 }
+
+impl MetadataLocalKey for StoreMetadataKey {
+    fn to_key(&self) -> &'static str {
+        match self {
+            StoreMetadataKey::Ttl => "user.fdo.store_ttl",
+        }
+    }
+}
+
+pub struct MetadataKey<T: MetadataLocalKey>(T);
 
 impl<T: MetadataLocalKey> MetadataKey<T> {
     fn to_key(&self) -> &str {
-        match self {
-            MetadataKey::Ttl => "user.store_ttl",
-            MetadataKey::Local(k) => k.to_key(),
-        }
+        self.to_key()
     }
 }
 

@@ -518,7 +518,7 @@ pub(super) async fn done(
 
     user_data.ownership_voucher_store.store_metadata(
         &device_guid,
-        &MetadataKey::Local(OwnershipVoucherStoreMetadataKey::To2Performed),
+        &MetadataKey(OwnershipVoucherStoreMetadataKey::To2Performed),
         &true,
     );
 
