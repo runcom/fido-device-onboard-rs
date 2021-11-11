@@ -95,6 +95,8 @@ where
     MKT: MetadataLocalKey,
 {
     fn add_eq(&mut self, key: &MetadataKey<MKT>, expected: &dyn MetadataValue);
+    fn add_lt(&self, key: &MetadataKey<MKT>, max: u128);
+
     fn query<'life0, 'async_trait>(
         &'life0 self,
     ) -> Pin<Box<dyn Future<Output = Result<Option<ValueIter<V>>, StoreError>> + 'async_trait + Send>>

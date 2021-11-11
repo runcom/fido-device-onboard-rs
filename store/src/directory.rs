@@ -96,6 +96,7 @@ fn ttl_to_disk(ttl: SystemTime) -> Result<Vec<u8>, StoreError> {
 pub struct DirectoryStoreFilterType {
     directory: PathBuf,
     eqs: Vec<(String, Vec<u8>)>,
+    lts: Vec<(String, u128)>,
 }
 
 #[async_trait]
@@ -156,12 +157,23 @@ where
                     Ok(Some(v)) => {
                         let matching = expected.iter().zip(&v).filter(|&(a, b)| a == b).count();
                         if expected.len() == matching {
-                            results.push(V::deserialize_from_reader(&file).map_err(|e| {
-                                StoreError::Unspecified(format!(
-                                    "Error deserializing value: {:?}",
-                                    e
-                                ))
-                            })?)
+                            results.push(path);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        log::trace!("Error checking {}: {}", key, e.to_string());
+                        continue;
+                    }
+                }
+            }
+            for lt in &self.lts {
+                let (key, max) = lt;
+                match file.get_xattr(key) {
+                    Ok(Some(v)) => {
+                        let value = u128::from_le_bytes(v.try_into().unwrap());
+                        if max > &value {
+                            results.push(path);
                         }
                     }
                     Ok(None) => {}
@@ -176,6 +188,9 @@ where
             index: 0,
             values: results,
         }))
+    }
+    fn add_lt(&self, key: &crate::MetadataKey<MKT>, max: u128) {
+        self.lts.push((key.to_key().to_owned(), max));
     }
 }
 
@@ -263,6 +278,7 @@ where
         Ok(Box::new(DirectoryStoreFilterType {
             directory: self.directory.clone(),
             eqs: Vec::new(),
+            lts: Vec::new(),
         }))
     }
 
