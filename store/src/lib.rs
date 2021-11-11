@@ -44,11 +44,15 @@ impl Writable for WriteOnlyOpen {}
 
 pub trait MetadataValue: Send + Sync {
     fn to_stored(&self) -> Result<Vec<u8>, StoreError>;
+    fn to_text(&self) -> String;
 }
 
 impl MetadataValue for bool {
     fn to_stored(&self) -> Result<Vec<u8>, StoreError> {
-            Ok(self.to_string().as_bytes().to_vec())
+        Ok(self.to_string().as_bytes().to_vec())
+    }
+    fn to_text(&self) -> String {
+        self.to_string()
     }
 }
 
@@ -60,6 +64,9 @@ impl MetadataValue for Duration {
         })?;
         let ttl = ttl.as_secs();
         Ok(u64::to_le_bytes(ttl).into())
+    }
+    fn to_text(&self) -> String {
+        self.as_secs().to_string()
     }
 }
 
@@ -79,6 +86,48 @@ impl<T: MetadataLocalKey> MetadataKey<T> {
             MetadataKey::Ttl => "user.store_ttl",
             MetadataKey::Local(k) => k.to_key(),
         }
+    }
+}
+
+pub trait FilterType<V, MKT>: Send + Sync
+where
+    V: Clone,
+    MKT: MetadataLocalKey,
+{
+    fn add_eq(&mut self, key: &MetadataKey<MKT>, expected: &dyn MetadataValue);
+    fn query<'life0, 'async_trait>(
+        &'life0 self,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<ValueIter<V>>, StoreError>> + 'async_trait + Send>>
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait;
+}
+
+pub struct ValueIter<V: Clone> {
+    values: Vec<V>,
+    index: usize,
+}
+
+impl<V> Iterator for ValueIter<V>
+where
+    V: Clone,
+{
+    type Item = V;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.values.len() {
+            return None;
+        }
+
+        let entry = self.values.get(self.index);
+        if let Some(e) = entry {
+            self.index += 1;
+            return Some(e.clone());
+        } else {
+            log::warn!("Error getting next entry");
+        }
+
+        None
     }
 }
 
@@ -104,6 +153,20 @@ pub trait Store<OT: StoreOpenMode, K, V, MKT: MetadataLocalKey>: Send + Sync {
         'life1: 'async_trait,
         'life2: 'async_trait,
         'life3: 'async_trait,
+        Self: 'async_trait,
+        OT: Writable;
+
+    fn query_data<'life0, 'async_trait>(
+        &'life0 self,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<Box<dyn FilterType<V, MKT>>, StoreError>>
+                + 'async_trait
+                + Send,
+        >,
+    >
+    where
+        'life0: 'async_trait,
         Self: 'async_trait,
         OT: Writable;
 
@@ -139,11 +202,11 @@ pub trait Store<OT: StoreOpenMode, K, V, MKT: MetadataLocalKey>: Send + Sync {
 
 #[cfg(feature = "directory")]
 mod directory;
-mod in_memory;
+// mod in_memory;
 
 #[derive(Debug, Deserialize)]
 pub enum StoreDriver {
-    InMemory,
+    // InMemory,
     #[cfg(feature = "directory")]
     Directory,
 }
@@ -161,7 +224,7 @@ impl StoreDriver {
         MKT: crate::MetadataLocalKey + 'static,
     {
         match self {
-            StoreDriver::InMemory => in_memory::initialize(cfg),
+            // StoreDriver::InMemory => in_memory::initialize(cfg),
             #[cfg(feature = "directory")]
             StoreDriver::Directory => directory::initialize(cfg),
         }
