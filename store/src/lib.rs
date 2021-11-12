@@ -1,7 +1,6 @@
 use core::future::Future;
 use core::pin::Pin;
 use core::time::Duration;
-use std::time::SystemTime;
 
 use serde::Deserialize;
 use thiserror::Error;
@@ -56,17 +55,14 @@ impl MetadataValue for bool {
     }
 }
 
-impl MetadataValue for Duration {
+impl MetadataValue for chrono::Duration {
     fn to_stored(&self) -> Result<Vec<u8>, StoreError> {
-        let ttl = SystemTime::now() + *self;
-        let ttl = ttl.duration_since(SystemTime::UNIX_EPOCH).map_err(|e| {
-            StoreError::Unspecified(format!("Error determining time from epoch to TTL: {:?}", e))
-        })?;
-        let ttl = ttl.as_secs();
-        Ok(u64::to_le_bytes(ttl).into())
+        let ttl = chrono::Local::now() + *self;
+        Ok(i64::to_le_bytes(ttl.timestamp()).into())
     }
     fn to_text(&self) -> String {
-        self.as_secs().to_string()
+        let ttl = chrono::Local::now() + *self;
+        ttl.format("%Y-%m-%d %H:%M:%S").to_string()
     }
 }
 
@@ -94,8 +90,8 @@ where
     V: Clone,
     MKT: MetadataLocalKey,
 {
-    fn add_eq(&mut self, key: &MetadataKey<MKT>, expected: &dyn MetadataValue);
-    fn add_lt(&self, key: &MetadataKey<MKT>, max: u128);
+    fn add_neq(&mut self, key: &MetadataKey<MKT>, expected: &dyn MetadataValue);
+    fn add_lt(&mut self, key: &MetadataKey<MKT>, max: i64);
 
     fn query<'life0, 'async_trait>(
         &'life0 self,

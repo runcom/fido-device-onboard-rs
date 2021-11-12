@@ -96,7 +96,7 @@ fn ttl_to_disk(ttl: SystemTime) -> Result<Vec<u8>, StoreError> {
 pub struct DirectoryStoreFilterType {
     directory: PathBuf,
     eqs: Vec<(String, Vec<u8>)>,
-    lts: Vec<(String, u128)>,
+    lts: Vec<(String, i64)>,
 }
 
 #[async_trait]
@@ -105,7 +105,7 @@ where
     V: Serializable + Send + Sync + Clone + 'static,
     MKT: MetadataLocalKey,
 {
-    fn add_eq(&mut self, key: &crate::MetadataKey<MKT>, expected: &dyn MetadataValue) {
+    fn add_neq(&mut self, key: &crate::MetadataKey<MKT>, expected: &dyn MetadataValue) {
         self.eqs
             .push((key.to_key().to_owned(), expected.to_stored().unwrap()));
     }
@@ -143,24 +143,18 @@ where
                 Ok(v) if v.is_file() => {}
                 Ok(_) => continue,
             }
-            let file = match File::open(&path) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(e) => {
-                    log::trace!("Error opening file {}", e.to_string());
-                    continue;
-                }
-                Ok(f) => f,
-            };
             for eq in &self.eqs {
                 let (key, expected) = eq;
-                match file.get_xattr(key) {
+                match xattr::get(path.clone(), key) {
                     Ok(Some(v)) => {
                         let matching = expected.iter().zip(&v).filter(|&(a, b)| a == b).count();
-                        if expected.len() == matching {
-                            results.push(path);
+                        if expected.len() != matching {
+                            results.push(path.clone());
                         }
                     }
-                    Ok(None) => {}
+                    Ok(None) => {
+                        results.push(path.clone());
+                    }
                     Err(e) => {
                         log::trace!("Error checking {}: {}", key, e.to_string());
                         continue;
@@ -169,11 +163,11 @@ where
             }
             for lt in &self.lts {
                 let (key, max) = lt;
-                match file.get_xattr(key) {
+                match xattr::get(path.clone(), key) {
                     Ok(Some(v)) => {
-                        let value = u128::from_le_bytes(v.try_into().unwrap());
-                        if max > &value {
-                            results.push(path);
+                        let value = i64::from_le_bytes(v.try_into().unwrap());
+                        if *max > value {
+                            results.push(path.clone());
                         }
                     }
                     Ok(None) => {}
@@ -184,12 +178,30 @@ where
                 }
             }
         }
+        let mut values = Vec::new();
+        for r in results {
+            println!("{:?}", r);
+            let file = match File::open(&r) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    log::trace!("Error opening file {}", e.to_string());
+                    continue;
+                }
+                Ok(f) => f,
+            };
+            let val = V::deserialize_from_reader(&file);
+            if let Ok(v) = val {
+                values.push(v)
+            } else {
+                log::trace!("Error deserializing data {:?}", r);
+            }
+        }
         Ok(Some(ValueIter {
             index: 0,
-            values: results,
+            values: values,
         }))
     }
-    fn add_lt(&self, key: &crate::MetadataKey<MKT>, max: u128) {
+    fn add_lt(&mut self, key: &crate::MetadataKey<MKT>, max: i64) {
         self.lts.push((key.to_key().to_owned(), max));
     }
 }

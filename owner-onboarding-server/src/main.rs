@@ -3,6 +3,7 @@ use std::fs;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Error, Result};
 use openssl::{
@@ -96,6 +97,31 @@ fn load_private_key(path: &str) -> Result<PKey<Private>> {
 }
 
 async fn report_to_rendezvous(udt: OwnerServiceUDT) -> std::result::Result<(), &'static str> {
+    let mut ft = udt.ownership_voucher_store.query_data().await.unwrap();
+    ft.add_neq(
+        &fdo_store::MetadataKey::Local(OwnershipVoucherStoreMetadataKey::To2Performed),
+        &true,
+    );
+    ft.add_lt(
+        &fdo_store::MetadataKey::Ttl,
+        chrono::Local::now().timestamp(),
+    );
+    // let device_guid = Guid::from_str("eae6edbe-8b53-7de4-abba-e63f9bb5ec1c").unwrap();
+    // udt.ownership_voucher_store
+    //     .store_metadata(
+    //         &device_guid,
+    //         &fdo_store::MetadataKey::Ttl,
+    //         &chrono::Duration::from_std(Duration::from_secs(60)).unwrap(),
+    //     )
+    //     .await
+    //     .unwrap();
+
+    let ov_iter = ft.query().await.unwrap();
+    if let Some(mut ovs) = ov_iter {
+        for ov in ovs {
+            println!("runcom");
+        }
+    }
     Ok(())
 }
 
@@ -201,7 +227,7 @@ async fn report_to_rendezvous(udt: OwnerServiceUDT) -> std::result::Result<(), &
 //     Ok(())
 // }
 
-const MAINTENANCE_INTERVAL: u64 = 60;
+const MAINTENANCE_INTERVAL: u64 = 10;
 
 async fn perform_maintenance(udt: OwnerServiceUDT) -> std::result::Result<(), &'static str> {
     log::info!(
@@ -212,15 +238,17 @@ async fn perform_maintenance(udt: OwnerServiceUDT) -> std::result::Result<(), &'
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(MAINTENANCE_INTERVAL)).await;
 
-        let ov_maint = udt.ownership_voucher_store.perform_maintenance();
+        // let ov_maint = udt.ownership_voucher_store.perform_maintenance();
         let ses_maint = udt.session_store.perform_maintenance();
         let rtr_maint = report_to_rendezvous(udt.clone());
 
         #[allow(unused_must_use)]
-        let (ov_res, ses_res, rtr_res) = tokio::join!(ov_maint, ses_maint, rtr_maint);
-        if let Err(e) = ov_res {
-            log::warn!("Error during ownership voucher store maintenance: {:?}", e);
-        }
+        // let (ov_res, ses_res, rtr_res) = tokio::join!(ov_maint, ses_maint, rtr_maint);
+        let (ses_res, rtr_res) = tokio::join!(ses_maint, rtr_maint);
+
+        // if let Err(e) = ov_res {
+        //     log::warn!("Error during ownership voucher store maintenance: {:?}", e);
+        // }
         if let Err(e) = ses_res {
             log::warn!("Error during session store maintenance: {:?}", e);
         }
