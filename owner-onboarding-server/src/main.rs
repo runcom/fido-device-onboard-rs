@@ -116,116 +116,99 @@ async fn report_to_rendezvous(udt: OwnerServiceUDT) -> std::result::Result<(), &
     //     .await
     //     .unwrap();
 
+    // grab a list of OVs that either:
+    // - have a To2Performed != true or empty
+    // OR
+    // - have a To2Performed != true or empty _AND_ have a To0AcceptOwnerTtl < now().timestamp() meaning AcceptOwner.WaitSeconds expired
+    //
+    // for each OV:
+    // - perform rtr
+    // -- if it went well, set/update To0AcceptOwnerTTL to now() + AcceptOwnerWaitSeconds
+    // -- if it went wrong, log and skip
+
     let ov_iter = ft.query().await.unwrap();
     if let Some(mut ovs) = ov_iter {
         for ov in ovs {
-            println!("runcom");
+            let ov_header = ov.header();
+            if ov_header.protocol_version() != PROTOCOL_VERSION {
+                // bail!(
+                //     "Protocol version in OV ({}) not supported ({})",
+                //     ov_header.protocol_version(),
+                //     PROTOCOL_VERSION
+                // );
+            }
+            // Determine the RV IP
+            let rv_info = ov_header
+                .rendezvous_info()
+                .to_interpreted(RendezvousInterpreterSide::Owner)
+                .context("Error parsing rendezvous directives")?;
+            if rv_info.is_empty() {
+                // bail!("No rendezvous information found that's usable for the owner");
+            }
+            let mut rendezvous_performed = false;
+            for rv_directive in rv_info {
+                let rv_urls = rv_directive.get_urls();
+                if rv_urls.is_empty() {
+                    log::info!(
+                        "No usable rendezvous URLs were found for RV directive: {:?}",
+                        rv_directive
+                    );
+                    continue;
+                }
+
+                for rv_url in rv_urls {
+                    println!("Using rendezvous server at url {}", rv_url);
+
+                    let mut rv_client = fdo_http_wrapper::client::ServiceClient::new(&rv_url);
+
+                    // Send: Hello, Receive: HelloAck
+                    let hello_ack: RequestResult<messages::to0::HelloAck> = rv_client
+                        .send_request(messages::to0::Hello::new(), None)
+                        .await;
+
+                    let hello_ack = match hello_ack {
+                        Ok(hello_ack) => hello_ack,
+                        Err(e) => {
+                            log::info!("Error requesting nonce from rendezvous server: {:?}", e);
+                            continue;
+                        }
+                    };
+
+                    // Build to0d and to1d
+                    let to0d = TO0Data::new(ov.clone(), wait_time, hello_ack.nonce3().clone())
+                        .context("Error creating to0d")?;
+                    let to0d_vec = to0d.serialize_data().context("Error serializing TO0Data")?;
+                    let to0d_hash = Hash::from_data(HashType::Sha384, &to0d_vec)
+                        .context("Error hashing to0d")?;
+                    let to1d_payload = TO1DataPayload::new(udt.owner_addresses.clone(), to0d_hash);
+                    let to1d = COSESign::new(&to1d_payload, None, &owner_private_key)
+                        .context("Error signing to1d")?;
+
+                    // Send: OwnerSign, Receive: AcceptOwner
+                    let msg = messages::to0::OwnerSign::new(to0d, to1d)
+                        .context("Error creating OwnerSign message")?;
+                    let accept_owner: RequestResult<messages::to0::AcceptOwner> =
+                        rv_client.send_request(msg, None).await;
+                    let accept_owner =
+                        accept_owner.context("Error registering self to rendezvous server")?;
+
+                    // Done!
+                    println!(
+                        "Rendezvous server registered us for {} seconds",
+                        accept_owner.wait_seconds()
+                    );
+                    rendezvous_performed = true;
+                    break;
+                }
+
+                if rendezvous_performed {
+                    break;
+                }
+            }
         }
     }
     Ok(())
 }
-
-// spawn for waitsecond, wait until TO2 done (how)
-
-// async fn report_to_rendezvous() -> std::result::Result<(), &'static str> {
-
-//     // let wait_time = matches.value_of("wait-time").unwrap();
-//     // let wait_time = wait_time
-//     //     .parse::<u32>()
-//     //     .with_context(|| format!("Error parsing wait time '{}'", wait_time))?;
-
-//     // get ovs from store and build a workqueue <- this steps is repeated every maintenance tick, skipping what's already in there
-//                                                    can be optimized to be event driven I guess but meh
-//        Q: do we need to keep track of which one we reported using xattrs for instance?
-//     // for every ov, check it's not in the waiting queue, if it is, skip
-//          report to rendezvous or log and skip if error
-//            if rtr went well, we got N seconds to wait for, use an async spawn?
-//               look up periodically in the ??? store to check if the device checked in
-//               if it did, drop the OV from the workqueue, done
-//               if it didn't, add the OV back to the queue
-//
-//     // then wait for acceptowner.waitsecond in another routine to check the device called in
-//     // if it doesn't, end the routine, and re-run report-to-rendezvous
-
-//     let ov_header = ov.header();
-//     if ov_header.protocol_version() != PROTOCOL_VERSION {
-//         bail!(
-//             "Protocol version in OV ({}) not supported ({})",
-//             ov_header.protocol_version(),
-//             PROTOCOL_VERSION
-//         );
-//     }
-
-//     // Determine the RV IP
-//     let rv_info = ov_header
-//         .rendezvous_info()
-//         .to_interpreted(RendezvousInterpreterSide::Owner)
-//         .context("Error parsing rendezvous directives")?;
-//     if rv_info.is_empty() {
-//         bail!("No rendezvous information found that's usable for the owner");
-//     }
-//     let mut rendezvous_performed = false;
-//     for rv_directive in rv_info {
-//         let rv_urls = rv_directive.get_urls();
-//         if rv_urls.is_empty() {
-//             log::info!(
-//                 "No usable rendezvous URLs were found for RV directive: {:?}",
-//                 rv_directive
-//             );
-//             continue;
-//         }
-
-//         for rv_url in rv_urls {
-//             println!("Using rendezvous server at url {}", rv_url);
-
-//             let mut rv_client = fdo_http_wrapper::client::ServiceClient::new(&rv_url);
-
-//             // Send: Hello, Receive: HelloAck
-//             let hello_ack: RequestResult<messages::to0::HelloAck> = rv_client
-//                 .send_request(messages::to0::Hello::new(), None)
-//                 .await;
-
-//             let hello_ack = match hello_ack {
-//                 Ok(hello_ack) => hello_ack,
-//                 Err(e) => {
-//                     log::info!("Error requesting nonce from rendezvous server: {:?}", e);
-//                     continue;
-//                 }
-//             };
-
-//             // Build to0d and to1d
-//             let to0d = TO0Data::new(ov.clone(), wait_time, hello_ack.nonce3().clone())
-//                 .context("Error creating to0d")?;
-//             let to0d_vec = to0d.serialize_data().context("Error serializing TO0Data")?;
-//             let to0d_hash =
-//                 Hash::from_data(HashType::Sha384, &to0d_vec).context("Error hashing to0d")?;
-//             let to1d_payload = TO1DataPayload::new(owner_addresses.clone(), to0d_hash);
-//             let to1d = COSESign::new(&to1d_payload, None, &owner_private_key)
-//                 .context("Error signing to1d")?;
-
-//             // Send: OwnerSign, Receive: AcceptOwner
-//             let msg = messages::to0::OwnerSign::new(to0d, to1d)
-//                 .context("Error creating OwnerSign message")?;
-//             let accept_owner: RequestResult<messages::to0::AcceptOwner> =
-//                 rv_client.send_request(msg, None).await;
-//             let accept_owner =
-//                 accept_owner.context("Error registering self to rendezvous server")?;
-
-//             // Done!
-//             println!(
-//                 "Rendezvous server registered us for {} seconds",
-//                 accept_owner.wait_seconds()
-//             );
-//             rendezvous_performed = true;
-//             break;
-//         }
-
-//         if rendezvous_performed {
-//             break;
-//         }
-//     }
-//     Ok(())
-// }
 
 const MAINTENANCE_INTERVAL: u64 = 10;
 
